@@ -1,0 +1,501 @@
+---
+title: "Confidence Voting Figures"
+author: "Scott Coffin"
+date: "6/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(reshape2)
+library(ggpubr)
+library(ggdark)
+```
+
+```{r}
+getwd()
+votes_rounds1.2 <- read_excel("voting_ambient.xlsx", sheet  ="Tidy") %>% 
+  mutate(Value = as.numeric(Value)) %>% 
+  mutate_if(is.character,as.factor)
+
+#pivot data to get in tidy format compatible wiht other dataframe
+votes_round3 <- read_excel("voting_ambient.xlsx", sheet  ="Round 3_tidy",
+                           na = "NA") %>% 
+  pivot_longer(cols = starts_with("Person"),
+               names_to = "Person",
+               values_to = "Value") %>% 
+  mutate(Round = "Round 3")
+
+votes <- rbind(votes_rounds1.2, votes_round3)
+```
+
+```{r}
+library(ggplot2) 
+library(grid)
+library(RColorBrewer)
+
+make_gradient <- function(deg = 45, n = 100, cols = blues9) {
+  cols <- colorRampPalette(cols)(n + 1)
+  rad <- deg / (180 / pi)
+  mat <- matrix(
+    data = rep(seq(0, 1, length.out = n) * cos(rad), n),
+    byrow = TRUE,
+    ncol = n
+  ) +
+  matrix(
+    data = rep(seq(0, 1, length.out = n) * sin(rad), n),
+    byrow = FALSE,
+    ncol = n
+  )
+  mat <- mat - min(mat)
+  mat <- mat / max(mat)
+  mat <- 1 + mat * n
+  mat <- matrix(data = cols[round(mat)], ncol = n)
+  grid::rasterGrob(
+    image = mat,
+    width = unit(1, "npc"),
+    height = unit(1, "npc"), 
+    interpolate = TRUE
+  )
+}
+```
+
+#prep
+```{r}
+#get data in wide format
+cast <- votes %>% 
+  #rowid_to_column(var = "rowid") %>% 
+  #dcast(Threshold + ERM + Round + Person ~  Confidence.Type, value.var = "Value")
+  dcast(... ~ Confidence.Type, value.var = "Value")
+  
+
+final <- cast %>% 
+  group_by(Person, Threshold, Round, ERM) %>%
+    dplyr::summarise(Confidence = sum(Confidence, na.rm = T),
+    `Level of Agreement` = sum(`Level of Agreement`, na.rm = T), 
+    `Weight of evidence` = sum(`Weight of evidence`, na.rm = T)) %>% 
+  na_if(0)
+
+### Repeat for confidence in threshold approach
+#get data in wide format
+approach <- votes %>% 
+  filter(ERM == "overall") %>% 
+  #rowid_to_column(var = "rowid") %>% 
+  #dcast(Threshold + ERM + Round + Person ~  Confidence.Type, value.var = "Value")
+  dcast(... ~ Threshold, value.var = "Value")
+```
+
+#Plot
+```{r}
+g <- make_gradient(
+  deg = 135, n = 500, cols = rev(brewer.pal(5, "Spectral"))
+)
+
+#make plot
+thresholds <- final %>% 
+  group_by(Threshold, Round, ERM) %>% 
+  summarize(mean.agreement = mean(`Level of Agreement`, na.rm = TRUE),
+            sd.agreement = sd(`Level of Agreement`, na.rm = TRUE),
+            mean.weight = mean(`Weight of evidence`, na.rm = TRUE),
+            sd.weight = sd(`Weight of evidence`, na.rm = TRUE),
+            min.agreement = min(`Level of Agreement`, na.rm = TRUE),
+            max.agreement = max(`Level of Agreement`, na.rm = TRUE),
+            min.weight = min(`Weight of evidence`, na.rm = TRUE),
+            max.weight = max(`Weight of evidence`, na.rm = TRUE),
+            )%>% 
+  filter(ERM != "overall") %>% 
+  filter(Round == "Round 3") %>% 
+         #Threshold == "Threshold 1") %>% 
+  ggplot(aes(y = mean.agreement, x = mean.weight, color = ERM, shape = ERM)) +
+  #make backgroud first
+  annotation_custom(
+    grob = g, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
+  ) +
+  #layer points on top
+  geom_point(size = 5, alpha = 0.7) +
+  scale_color_manual(#name = "Ecologically Relevant Metric",
+                       values = c("gray1", "gray40"),
+                     labels = c("Food Dilution", "Translocation")) +
+  scale_shape_manual(#name = "Ecologically Relevant Metric",
+                     values = c(19, 17),
+                     labels = c("Food Dilution", "Translocation")) +
+  ###error bars as range ####
+  geom_errorbar(aes(ymin = min.agreement, ymax = max.agreement),
+                width = 0.3, color = "black", alpha = 0.7) +
+  geom_errorbarh(aes(xmin = min.weight, xmax = max.weight),
+                 height = 0.3, color = "black", alpha = 0.7) +
+  
+  ### Error bars as sd ####
+  # geom_errorbar(aes(ymin = mean.agreement - sd.agreement, ymax = mean.agreement + sd.agreement),
+  #               width = 0.3) +
+  # geom_errorbarh(aes(xmin = mean.weight - sd.weight, xmax = mean.weight + sd.weight),
+  #                width = 0.3) +
+  # #give range
+  # scale_x_continuous(limits = c(1,5),
+  #                    breaks = 1:5,
+  #                    labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  # scale_y_continuous(limits = c(1,5),
+  #                    breaks = 1:5,
+  #                    labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+ # scale_x_discrete(breaks = 1:3, labels = c("Very low", "Medium", "Very high")) +
+  #labels
+  labs(#title = "Ambient Microplastics Framework Confidence Voting",
+       #subtitle = "Mean +- s.d. (n = 11)",
+         x = "Weight of Evidence",
+       y = "Level of Agreement in the outcome among studies") +
+#dark_theme_minimal(base_size = 14) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        legend.position = "top") +
+  facet_wrap(~Threshold)
+  #facet_grid(Threshold ~ ERM)#,
+             #nrow = 4)
+
+thresholds
+```
+```{r}
+approach_fig <- approach %>% 
+  group_by(Round) %>% 
+  summarize(mean.analytical = mean(`Analytical Process`, na.rm = TRUE),
+            sd.analytical = sd(`Analytical Process`, na.rm = TRUE),
+            mean.Framework = mean(`Framework`, na.rm = TRUE),
+            sd.Framework = sd(`Framework`, na.rm = TRUE),
+            max.analytical = max(`Analytical Process`, na.rm = TRUE),
+            min.analytical = min(`Analytical Process`, na.rm = TRUE),
+            max.Framework = max(`Framework`, na.rm = TRUE),
+            min.Framework = min(`Framework`, na.rm = TRUE)) %>% 
+  filter(Round == "Round 3") %>% 
+         #Threshold == "Threshold 1") %>% 
+  ggplot(aes(y = mean.analytical, x = mean.Framework)) +
+  #make backgroud first
+  annotation_custom(
+    grob = g, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
+  ) +
+  #layer points on top
+  geom_point(size = 5, color = "black", shape = "square") +
+  # scale_color_manual(name = "Ecologically Relevant Metric",
+  #                      values = c("black"),
+  #                    labels = c("Food Dilution")) +
+  # scale_shape_manual(name = "Ecologically Relevant Metric",
+  #                    values = c(19),
+  #                    labels = c("Food Dilution")) +
+  ###Range ###
+  geom_errorbar(aes(ymin = min.analytical, ymax = max.analytical),
+                width = 0.3, color = "black") +
+  geom_errorbarh(aes(xmin = min.Framework, xmax = max.Framework),
+                 width = 0.3, color = "black") +
+  ###standard deviation###
+  # geom_errorbar(aes(ymin = mean.analytical - sd.analytical, ymax = mean.analytical + sd.analytical),
+  #               width = 0.3, color = "black") +
+  # geom_errorbarh(aes(xmin = mean.Framework - sd.Framework, xmax = mean.Framework + sd.Framework),
+  #                width = 0.3, color = "black") +
+  #give range
+  coord_cartesian(ylim = c(1,5),
+                  xlim = c(1,5)) +
+  # scale_x_continuous(
+  #                    breaks = 1:5,
+  #                    labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  # scale_y_continuous(
+  #                    breaks = 1:5,
+  #                    labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+ # scale_x_discrete(breaks = 1:3, labels = c("Very low", "Medium", "Very high")) +
+  #labels
+  labs(#title = "Ambient Microplastics Framework Confidence Voting",
+       #subtitle = "Mean +- s.d. (n = 11)",
+         x = "Confidence in Analytical Process",
+       y = "Confidence in Framework") +
+  dark_theme_minimal(base_size = 16) +
+#theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5))
+
+approach_fig
+```
+## Manuscript Figure
+```{r}
+vote_figure <- ggarrange(approach_fig,thresholds,
+                        labels = c("A", "B"), common.legend = FALSE,
+                        legend = "top",
+                        heights = c(1,1.5),
+                        ncol = 1, nrow = 2)
+
+plot(vote_figure)
+
+ggsave(plot = vote_figure,
+       filename = "Confidence_Votes_Fig3.jpeg",
+       width = 6.5, height = 12, units = "in", bg = "white", scale = 0.8,
+       dpi = 300)
+
+
+##horizontal
+
+vote_figure_horizontal <- ggarrange(approach_fig,thresholds,
+                        labels = c("A", "B"), common.legend = FALSE,
+                        legend = "top",
+                        #widths = c(1,1.3),
+                        ncol = 2, nrow = 1)
+
+
+ggsave(plot =vote_figure_horizontal,
+       filename = "Confidence_Votes_h_Fig3.jpeg",
+       width = 12, height = 6.5, units = "in", bg = "white", scale = 0.8,
+       dpi = 300)
+```
+#Change over time
+
+```{r}
+approach_rounds <- approach %>% 
+  group_by(Round) %>% 
+  summarize(mean.analytical = mean(`Analytical Process`, na.rm = TRUE),
+            sd.analytical = sd(`Analytical Process`, na.rm = TRUE),
+            mean.Framework = mean(`Framework`, na.rm = TRUE),
+            sd.Framework = sd(`Framework`, na.rm = TRUE)) %>% 
+ # filter(Round == "Round 3") %>% 
+         #Threshold == "Threshold 1") %>% 
+  ggplot(aes(y = mean.analytical, x = mean.Framework, color = Round)) +
+  #make backgroud first
+  annotation_custom(
+    grob = g, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
+  ) +
+  #layer points on top
+  geom_point(size = 5, shape = "square") +
+  # add error bars
+  geom_errorbar(aes(ymin = mean.analytical - sd.analytical, ymax = mean.analytical + sd.analytical),
+                width = 0.3) +
+  geom_errorbarh(aes(xmin = mean.Framework - sd.Framework, xmax = mean.Framework + sd.Framework),
+                 width = 0.3) +
+  #give range
+  coord_cartesian(ylim = c(1,5),
+                  xlim = c(1,5)) +
+  scale_x_continuous(
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  scale_y_continuous(
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+ # scale_x_discrete(breaks = 1:3, labels = c("Very low", "Medium", "Very high")) +
+  #labels
+  labs(#title = "Ambient Microplastics Framework Confidence Voting",
+       #subtitle = "Mean +- s.d. (n = 11)",
+         x = "Confidence in Analytical Process",
+       y = "Confidence in Framework") +
+theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5))
+
+approach_rounds
+```
+# Double BoxPLot
+Code to make double box plot in R
+ https://stackoverflow.com/questions/46068074/double-box-plots-in-ggplot2
+
+```{r}
+#step 1. Plot each dimension's boxplot separately:
+dataframe <- approach %>%  filter(Round == "Round 3")
+plot.x <- ggplot(dataframe) + geom_boxplot(aes(`Analytical Process`))
+plot.y <- ggplot(dataframe) + geom_boxplot(aes(Framework))
+
+#Step 2. Obtain the calculated boxplot values (including outliers) in 1 data frame:
+plot.x <- layer_data(plot.x)[,1:6]
+plot.y <- layer_data(plot.y)[,1:6]
+colnames(plot.x) <- paste0("x.",gsub("x", "", colnames(plot.x)))
+colnames(plot.y) <- paste0("y.",gsub("x", "", colnames(plot.y)))
+df <- cbind(plot.x, plot.y); rm(plot.x, plot.y)
+#df$category <- sort(unique(iris$Species))
+
+#Step 3. Create a separate data frame for outliers:
+df.outliers <- df %>%
+  select(#category, 
+         x.middle, x.outliers,
+         y.middle, y.outliers
+         ) %>%
+  data.table::data.table()
+
+df.outliers <- df.outliers[, list(x.outliers = unlist(x.outliers), y.outliers = unlist(y.outliers)), 
+                           by = list(#category,
+                             x.middle, y.middle)]
+
+#Step 4. Putting it all together in one plot:
+ggplot(df, aes(#fill = category, color = category
+  )) +
+   #make backgroud first
+ annotation_custom(grob = g, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf) +
+ 
+labs(#title = "Ambient Microplastics Framework Confidence Voting",
+       #subtitle = "Mean +- s.d. (n = 11)",
+         x = "Confidence in Analytical Process",
+       y = "Confidence in Framework") +
+theme_minimal(base_size = 14) +
+  #give range
+  coord_cartesian(ylim = c(1,5),
+                  xlim = c(1,5)) +
+  scale_x_continuous(
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  scale_y_continuous(
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  
+  # 2D box defined by the Q1 & Q3 values in each dimension, with outline
+  geom_rect(aes(xmin = x.lower, xmax = x.upper, ymin = y.lower, ymax = y.upper), alpha = 0.3) +
+  geom_rect(aes(xmin = x.lower, xmax = x.upper, ymin = y.lower, ymax = y.upper), 
+            color = "black", fill = NA) +
+
+  # whiskers for x-axis dimension with ends
+  geom_segment(aes(x = x.min, y = y.middle, xend = x.ma, yend = y.middle)) + #whiskers
+  geom_segment(aes(x = x.min, y = y.lower, xend = x.min, yend = y.upper)) + #lower end
+  geom_segment(aes(x = x.ma, y = y.lower, xend = x.ma, yend = y.upper)) + #upper end
+
+  # whiskers for y-axis dimension with ends
+  geom_segment(aes(x = x.middle, y = y.min, xend = x.middle, yend = y.ma)) + #whiskers
+  geom_segment(aes(x = x.lower, y = y.min, xend = x.upper, yend = y.min)) + #lower end
+  geom_segment(aes(x = x.lower, y = y.ma, xend = x.upper, yend = y.ma)) + #upper end
+
+  # outliers
+  geom_point(data = df.outliers, aes(x = x.outliers, y = y.middle), size = 3, shape = 1) + # x-direction
+  geom_point(data = df.outliers, aes(x = x.middle, y = y.outliers), size = 3, shape = 1) + # y-direction
+  
+  geom_point(aes(x = `Analytical Process`, y = Framework), data = dataframe, alpha = 0.5)
+
+```
+
+```{r}
+library(boxplotdbl)
+
+#make plot
+thresholds <- final %>% 
+  group_by(Threshold, Round, ERM) %>% 
+  summarize(mean.agreement = mean(`Level of Agreement`, na.rm = TRUE),
+            sd.agreement = sd(`Level of Agreement`, na.rm = TRUE),
+            mean.weight = mean(`Weight of evidence`, na.rm = TRUE),
+            sd.weight = sd(`Weight of evidence`, na.rm = TRUE)) %>% 
+  filter(ERM != "overall") %>% 
+  filter(Round == "Round 3") %>% 
+         #Threshold == "Threshold 1") %>% 
+  ggplot(aes(y = mean.agreement, x = mean.weight, #color = ERM, 
+             shape = ERM)) +
+  #make backgroud first
+  annotation_custom(
+    grob = g, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
+  ) +
+  #layer points on top
+  
+  
+  scale_color_manual(name = "Ecologically Relevant Metric",
+                       values = c("gray1", "gray40"),
+                     labels = c("Food Dilution", "Translocation")) +
+  scale_shape_manual(name = "Ecologically Relevant Metric",
+                     values = c(19, 17),
+                     labels = c("Food Dilution", "Translocation")) +
+  #give range
+  scale_x_continuous(limits = c(1,5),
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  scale_y_continuous(limits = c(1,5),
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+ # scale_x_discrete(breaks = 1:3, labels = c("Very low", "Medium", "Very high")) +
+  #labels
+  labs(#title = "Ambient Microplastics Framework Confidence Voting",
+       #subtitle = "Mean +- s.d. (n = 11)",
+         x = "Weight of Evidence",
+       y = "Level of Agreement in the outcome among studies") +
+theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5)) +
+  facet_wrap(~Threshold)
+  #facet_grid(Threshold ~ ERM)#,
+             #nrow = 4)
+
+thresholds
+```
+```{r}
+approach_fig <- approach %>% 
+  filter(Round == "Round 3") %>% 
+         #Threshold == "Threshold 1") %>% 
+  ggplot(aes(y = `Analytical Process`, x = Framework)) +
+ 
+   #make backgroud first
+ annotation_custom(grob = g, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf) +
+ 
+  ## BAG
+  geom_bag(color = "black") +
+  
+  # #POINTS and error bars
+  #  #layer points on top
+  # geom_point(size = 5, color = "black", shape = "square") +
+  #  # add error bars
+  # geom_errorbar(aes(ymin = mean.analytical - sd.analytical, ymax = mean.analytical + sd.analytical),
+  #               width = 0.3, color = "black") +
+  # geom_errorbarh(aes(xmin = mean.Framework - sd.Framework, xmax = mean.Framework + sd.Framework),
+  #                width = 0.3, color = "black") +
+  
+  
+  #give range
+  coord_cartesian(ylim = c(1,5),
+                  xlim = c(1,5)) +
+  scale_x_continuous(
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+  scale_y_continuous(
+                     breaks = 1:5,
+                     labels = c("Very low", "Low", "Medium", "High", "Very high")) +
+ # scale_x_discrete(breaks = 1:3, labels = c("Very low", "Medium", "Very high")) +
+  #labels
+  labs(#title = "Ambient Microplastics Framework Confidence Voting",
+       #subtitle = "Mean +- s.d. (n = 11)",
+         x = "Confidence in Analytical Process",
+       y = "Confidence in Framework") +
+theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5))
+
+approach_fig
+```
+## Manuscript Figure
+```{r}
+vote_figure <- ggarrange(approach_fig,thresholds,
+                        labels = c("A", "B"), common.legend = TRUE,
+                        legend = "bottom",
+                        ncol = 1, nrow = 2)
+
+plot(vote_figure)
+
+# ggsave(plot = vote_figure,
+#        filename = "Confidence_Votes_Fig3.jpeg",
+#        path = "./Concentration data/Threshold_Manuscript_Figs/", 
+#        width = 12, height = 12, units = "in", bg = "white",
+#        dpi = 300)
+```
+
+## Quality score assessment
+```{r}
+require(readr)
+#load aoc_z into dataframe. This file is generated from RDA_Maker.R
+#source("Tox Data/RDA_Maker.R")
+aoc_z <- readRDS(file = "../Tox Data/aoc_z.Rda")
+```
+Are there time trends related to quality of papers?
+```{r}
+aoc_z %>% 
+  group_by(year) %>% 
+  dplyr::summarize(mean_quality = mean(total.quality),
+            sd = sd(total.quality),
+            count = n_distinct(doi)) %>% 
+  mutate(sem = sd / sqrt(count)) %>% 
+  #filter(tech.tier.zero == "Red Criteria Passed") %>% 
+  ggplot(aes(x = as.numeric(year), y = mean_quality#,
+         #    alpha = count)
+         ) +
+  geom_col() +
+  geom_errorbar(aes(ymin = mean_quality - sem, ymax = mean_quality + sem))
+```
+
+
